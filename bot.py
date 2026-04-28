@@ -812,34 +812,57 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 # ================= MAIN =================
 if __name__ == "__main__":
-    print(f"🔐 Bot xavfsizlik: faol")
+    print("=" * 50)
+    print(f"🚀 BOT ISHGA TUSHIRILDI")
+    print(f"⏰ Vaqt: {datetime.now()}")
     print(f"🆔 Admin ID: {config.ADMIN_ID}")
     print(f"👥 Guruh ID: {GROUP_ID}")
-    print("🚀 BOT ISHGA TUSHIRILDI")
     print("📌 FAQAT GURUHGA QO'SHISH HISOBLANADI!")
+    print("=" * 50)
     
-    # Threadlarni ishga tushirish
+    # Leaderboard thread
     Thread(target=leaderboard_scheduler, daemon=True).start()
     
-    # Eski pollingni to'xtatish
-    try:
-        bot.stop_polling()
-        time.sleep(1)
-    except:
-        pass
+    # Botni ishga tushirish
+    retry_count = 0
     
-    # Asosiy loop
     while True:
         try:
-            print("♻️ Polling boshlandi...")
-            bot.infinity_polling(timeout=30, long_polling_timeout=30, skip_pending=True)
+            retry_count += 1
+            print(f"\n🔄 {retry_count}-polling boshlandi...")
+            
+            # Oddiy polling (infinity_polling emas)
+            bot.polling(
+                none_stop=True,
+                interval=0,
+                timeout=30,
+                long_polling_timeout=60,
+                skip_pending=True
+            )
+            
         except KeyboardInterrupt:
-            print("👋 Bot to'xtatildi")
+            print("\n👋 Bot qo'lda to'xtatildi")
+            bot.stop_polling()
             break
+            
         except Exception as e:
-            if "409" in str(e):
-                print("⚠️ 409 xato - 10 soniya kuting...")
+            error_str = str(e)
+            
+            if "409" in error_str:
+                print(f"⚠️ 409 xato - 15 soniya kuting...")
+                time.sleep(15)
+            elif "timed out" in error_str.lower():
+                print(f"⚠️ Timeout - 5 soniya kuting...")
+                time.sleep(5)
+            elif "Connection" in error_str:
+                print(f"⚠️ Aloqa xatosi - 10 soniya kuting...")
                 time.sleep(10)
             else:
-                logger.critical(f"KRITIK XATOLIK: {e}")
+                print(f"⚠️ Xato: {error_str[:100]}")
                 time.sleep(5)
+            
+            # Eski pollingni tozalash
+            try:
+                bot.stop_polling()
+            except:
+                pass
