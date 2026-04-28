@@ -3,6 +3,8 @@ import sqlite3
 import logging
 import os
 import time
+import signal
+import sys
 from telebot import types
 from datetime import datetime
 from threading import Lock, Thread
@@ -19,7 +21,6 @@ class SecurityConfig:
         self.BOT_USERNAME = os.getenv("BOT_USERNAME", "stars_sovga_gifbot")
         self.RATE_LIMIT = 5
         self.ADMINS = [2010030869]
-        self.REFERRAL_BONUS = 1  # Har bir taklif uchun bonus
         
         if not self.API_TOKEN:
             raise ValueError("❌ TOKEN topilmadi!")
@@ -39,12 +40,15 @@ REQUIRED_CHANNELS = [
         "name": "📢 KANAL"
     },
     {
-        "id":-1002449896845,  # ← Guruh ID ni o'zgartiring
-        "username": "@Stars_2_odam_1stars",  # ← Guruh username
-        "url": "https://t.me/Stars_2_odam_1stars",  # ← Guruh linki
+        "id": -1002449896845,
+        "username": "@Stars_2_odam_1stars",
+        "url": "https://t.me/Stars_2_odam_1stars",
         "name": "👥 GURUH"
     }
 ]
+
+# Guruh ID (faqat shu guruhga qo'shish hisoblanadi)
+GROUP_ID = -1002449896845  # Guruh ID
 
 # ================= RATE LIMITING =================
 class RateLimiter:
@@ -128,7 +132,6 @@ class DB:
                 stars INTEGER DEFAULT 0,
                 vip INTEGER DEFAULT 0,
                 is_banned INTEGER DEFAULT 0,
-                invited_by INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             
@@ -138,28 +141,28 @@ class DB:
                 invited_id INTEGER,
                 invited_username TEXT,
                 invited_name TEXT,
-                source TEXT DEFAULT 'link',
+                group_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """)
             self.conn.commit()
 
-    def create_user(self, uid, username, name, invited_by=0):
+    def create_user(self, uid, username, name):
         with lock:
             self.cur.execute(
-                "INSERT OR IGNORE INTO users(user_id, username, first_name, invited_by) VALUES(?,?,?,?)",
-                (uid, username, name, invited_by)
+                "INSERT OR IGNORE INTO users(user_id, username, first_name) VALUES(?,?,?)",
+                (uid, username, name)
             )
             self.conn.commit()
 
     def get(self, uid):
         with lock:
             self.cur.execute(
-                "SELECT invites, stars, vip, invited_by FROM users WHERE user_id=?", 
+                "SELECT invites, stars, vip FROM users WHERE user_id=?", 
                 (uid,)
             )
             row = self.cur.fetchone()
-            return (row[0], row[1], row[2], row[3]) if row else (0, 0, 0, 0)
+            return (row[0], row[1], row[2]) if row else (0, 0, 0)
 
     def add_invite(self, uid, count=1):
         with lock:
@@ -183,21 +186,21 @@ class DB:
             self.conn.commit()
             return invites, stars
 
-    def add_invite_history(self, inviter_id, invited_id, invited_username, invited_name, source="link"):
+    def add_invite_history(self, inviter_id, invited_id, invited_username, invited_name, group_id):
         with lock:
             self.cur.execute("""
-                INSERT INTO invite_history(inviter_id, invited_id, invited_username, invited_name, source)
+                INSERT INTO invite_history(inviter_id, invited_id, invited_username, invited_name, group_id)
                 VALUES(?,?,?,?,?)
-            """, (inviter_id, invited_id, invited_username, invited_name, source))
+            """, (inviter_id, invited_id, invited_username, invited_name, group_id))
             self.conn.commit()
 
-    def check_duplicate_invite(self, inviter_id, invited_id):
-        """Takroriy taklifni tekshirish"""
+    def check_duplicate_invite(self, inviter_id, invited_id, group_id):
+        """Takroriy taklifni tekshirish (bir guruhda)"""
         with lock:
             self.cur.execute("""
                 SELECT COUNT(*) FROM invite_history 
-                WHERE inviter_id=? AND invited_id=?
-            """, (inviter_id, invited_id))
+                WHERE inviter_id=? AND invited_id=? AND group_id=?
+            """, (inviter_id, invited_id, group_id))
             return self.cur.fetchone()[0] > 0
 
     def sub_star(self, uid, amount):
@@ -281,10 +284,10 @@ class DB:
             return self.cur.fetchall()
 
     def get_user_invites_detail(self, uid):
-        """Foydalanuvchi taklif qilgan odamlar ro'yxati"""
+        """Foydalanuvchi guruhga taklif qilgan odamlar ro'yxati"""
         with lock:
             self.cur.execute("""
-                SELECT invited_id, invited_username, invited_name, source, created_at
+                SELECT invited_id, invited_username, invited_name, group_id, created_at
                 FROM invite_history
                 WHERE inviter_id=?
                 ORDER BY created_at DESC
@@ -340,23 +343,23 @@ def get_shop_items():
 
 # ================= MENU =================
 def menu(uid, chat_id):
-    invites, stars, vip, _ = db.get(uid)
+    invites, stars, vip = db.get(uid)
     
     not_subscribed = check_sub(uid)
     sub_status = ""
     if not_subscribed:
         channels_list = "\n".join([f"• {ch['name']} - {ch['username']}" for ch in not_subscribed])
-        sub_status = f"\n\n⚠️ <b>Obuna bo'lmagan:</b>\n{channels_list}\n<i>Obuna bo'lish uchun /start bosing</i>"
+        sub_status = f"\n\n⚠️ <b>Obuna bo'lmagan:</b>\n{channels_list}"
     
     text = f"""
 🌟 <b>REFERRAL SYSTEM</b> 🌟
 
 👤 Sizning holatingiz:
-👥 Taklif qilganingiz: <b>{invites}</b> ta
+👥 Guruhga taklif qilganingiz: <b>{invites}</b> ta
 ⭐ Yulduzlar: <b>{stars}</b>
 👑 VIP: <b>{"✅ HA" if vip else "❌ YO'Q"}</b>{sub_status}
 
-🎯 <i>Har 2 ta taklif = 1 yulduz</i>
+🎯 <i>Guruhga har 2 ta odam qo'shsangiz = 1 yulduz</i>
 """
     m = types.InlineKeyboardMarkup(row_width=1)
     m.add(types.InlineKeyboardButton("🔗 Mening Invite Linkim", callback_data="link"))
@@ -366,7 +369,7 @@ def menu(uid, chat_id):
     bot.send_message(chat_id, text, reply_markup=m)
 
 def shop_menu(chat_id, uid):
-    _, stars, _, _ = db.get(uid)
+    _, stars, _ = db.get(uid)
     markup = types.InlineKeyboardMarkup(row_width=3)
     
     shop_data = get_shop_items()
@@ -398,7 +401,7 @@ def callback_handler(call):
         link = f"https://t.me/{config.BOT_USERNAME}?start={uid}"
         bot.send_message(
             call.message.chat.id, 
-            f"🔗 Sizning invite linkingiz:\n<code>{link}</code>\n\n👥 Bu link orqali odamlar qo'shilsa, sizga taklif qo'shiladi!"
+            f"🔗 Sizning invite linkingiz:\n<code>{link}</code>"
         )
     elif data == "top":
         send_top(call.message.chat.id)
@@ -437,17 +440,16 @@ def check_subscription(call):
         )
 
 def show_invite_history(chat_id, uid):
-    """Taklif tarixini ko'rsatish"""
+    """Guruhga taklif tarixini ko'rsatish"""
     history = db.get_user_invites_detail(uid)
     
     if not history:
-        return bot.send_message(chat_id, "❌ Hali hech kimni taklif qilmagansiz!")
+        return bot.send_message(chat_id, "❌ Hali guruhga hech kimni taklif qilmagansiz!")
     
-    text = f"📊 <b>TAKLIFLAR TARIXI</b>\n\n"
-    for i, (invited_id, username, name, source, date) in enumerate(history, 1):
+    text = f"📊 <b>GURUHGA TAKLIFLAR TARIXI</b>\n\n"
+    for i, (invited_id, username, name, group_id, date) in enumerate(history, 1):
         user_display = f"@{username}" if username else name
-        source_emoji = "🔗" if source == "link" else "👥"
-        text += f"{i}. {source_emoji} {user_display}\n"
+        text += f"{i}. 👤 {user_display}\n"
         text += f"   🆔 <code>{invited_id}</code>\n"
         text += f"   📅 {date}\n\n"
     
@@ -455,7 +457,7 @@ def show_invite_history(chat_id, uid):
     bot.send_message(chat_id, text)
 
 def buy_item(call, uid, price):
-    _, stars, _, _ = db.get(uid)
+    _, stars, _ = db.get(uid)
     
     if stars < price:
         return bot.answer_callback_query(call.id, "❌ Yetarli yulduz yo'q!", show_alert=True)
@@ -473,7 +475,7 @@ def buy_item(call, uid, price):
         db.grant_vip(uid)
         extra = "\n\n👑 <b>VIP</b> statusi berildi!"
 
-    _, new_stars, _, _ = db.get(uid)
+    _, new_stars, _ = db.get(uid)
     
     caption = f"""
 🎉 <b>Sizga sovg'a yetkazildi!</b> 🎉
@@ -484,7 +486,7 @@ def buy_item(call, uid, price):
 💰 Sarflandi: <b>{price} ⭐</b>
 ⭐ Qoldi: <b>{new_stars}</b>{extra}
 
-Rahmat! Yana taklif qiling ✨
+Rahmat! Guruhga yana odam qo'shing ✨
 """
     bot.send_photo(call.message.chat.id, item['photo'], caption=caption)
     bot.answer_callback_query(call.id, "✅ Sovg'a yetkazildi!", show_alert=True)
@@ -511,65 +513,71 @@ def send_top(chat_id):
     if not top:
         return bot.send_message(chat_id, "❌ Hali hech kim yo'q!")
     
-    text = "🏆 <b>ENG FAOL REFERRALLAR</b>\n\n"
+    text = "🏆 <b>ENG FAOL TAKLIFCHILAR</b>\n\n"
     for i, (username, name, invites, stars) in enumerate(top, 1):
         user = f"@{username}" if username else name
         medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}️⃣"
         text += f"{medal} <b>{user}</b> — 👥 {invites} ta | ⭐ {stars} yulduz\n"
-    text += "\n🔥 Har 2 ta odam qo'shsangiz = 1 yulduz"
+    text += "\n🔥 Guruhga har 2 ta odam qo'shsangiz = 1 yulduz"
     
     bot.send_message(chat_id, text)
 
-# ================= GURUHGA QO'SHILGANLARNI HISOBLASH =================
+# ================= FAQAT GURUHGA QO'SHILGANLARNI HISOBLASH =================
 @bot.message_handler(content_types=['new_chat_members'])
 def handle_new_members(message):
-    """Guruhga yangi odam qo'shilganda"""
+    """FAQAT GURUHGA yangi odam qo'shilganda hisoblanadi"""
+    
+    # FAQAT BELGILANGAN GURUHDA ISHLAYDI
+    if message.chat.id != GROUP_ID:
+        return
+    
     new_members = message.new_chat_members
     
     for new_member in new_members:
+        # Botlarni hisoblamaslik
         if new_member.is_bot:
-            continue  # Botlarni hisoblamaslik
+            continue
         
-        # Taklif qilgan odamni aniqlash
+        # Taklif qilgan odam
         inviter_id = message.from_user.id
         invited_id = new_member.id
         
-        # O'zini o'zi taklif qilolmaysiz
+        # O'zini o'zi taklif qilsa hisoblanmaydi
         if inviter_id == invited_id:
             continue
         
         # Takroriy taklifni tekshirish
-        if db.check_duplicate_invite(inviter_id, invited_id):
+        if db.check_duplicate_invite(inviter_id, invited_id, message.chat.id):
             continue
         
-        # Taklif qiluvchini ma'lumotlar bazasiga qo'shish
+        # Taklif qiluvchini bazaga qo'shish
         db.create_user(inviter_id, message.from_user.username, message.from_user.first_name)
         
-        # Taklif qilingan odamni qo'shish
-        db.create_user(invited_id, new_member.username, new_member.first_name, inviter_id)
+        # Taklif qilingan odamni bazaga qo'shish
+        db.create_user(invited_id, new_member.username, new_member.first_name)
         
-        # Taklif tarixiga qo'shish
+        # Taklif tarixiga yozish
         db.add_invite_history(
             inviter_id, 
             invited_id, 
             new_member.username, 
             new_member.first_name, 
-            "group"
+            message.chat.id
         )
         
-        # Taklif sonini oshirish
+        # Taklif sonini oshirish (+1)
         db.add_invite(inviter_id, 1)
         
-        # Guruhga xabar yuborish
+        # Guruhga xabar
         welcome_text = f"""
 🎉 <b>YANGI ISHTIROKCHI!</b>
 
 👤 <a href='tg://user?id={invited_id}'>{new_member.first_name}</a> guruhga qo'shildi!
 
 👥 Taklif qilgan: <a href='tg://user?id={inviter_id}'>{message.from_user.first_name}</a>
-⭐ Taklif qiluvchiga +1 taklif qo'shildi!
+⭐ +1 taklif qo'shildi!
 
-<i>Har 2 ta taklif = 1 yulduz</i>
+<i>Har 2 ta taklif = 1 yulduz ⭐</i>
 """
         try:
             bot.send_message(message.chat.id, welcome_text)
@@ -578,12 +586,13 @@ def handle_new_members(message):
         
         # Taklif qiluvchiga shaxsiy xabar
         try:
+            _, stars, _ = db.get(inviter_id)
             personal_text = f"""
 🎉 <b>TABRIKLAYMIZ!</b>
 
 Siz {new_member.first_name} ni guruhga taklif qildingiz!
-👥 Takliflar: +1
-⭐ Yana 1 ta taklif qilsangiz, +1 yulduz olasiz!
+👥 Jami takliflaringiz: +1
+⭐ Hozirgi yulduzlaringiz: {stars}
 
 <i>Bot: @{config.BOT_USERNAME}</i>
 """
@@ -626,40 +635,8 @@ Obuna bo'lgach, "✅ HAMMASIGA OBUNA BO'LDIM" tugmasini bosing."""
         
         return bot.send_message(m.chat.id, text, reply_markup=markup)
     
-    # Foydalanuvchini yaratish
-    invited_by = 0
-    if m.text and len(m.text.split()) > 1:
-        try:
-            invited_by = int(m.text.split()[1])
-        except:
-            invited_by = 0
-    
-    db.create_user(uid, m.from_user.username, m.from_user.first_name, invited_by)
-    
-    # Referrer orqali kelgan bo'lsa
-    if invited_by > 0 and invited_by != uid:
-        if not db.check_duplicate_invite(invited_by, uid):
-            # Taklif qiluvchini ham yaratish
-            try:
-                inviter_info = bot.get_chat(invited_by)
-                db.create_user(invited_by, inviter_info.username, inviter_info.first_name)
-            except:
-                pass
-            
-            # Taklif tarixiga qo'shish
-            db.add_invite_history(invited_by, uid, m.from_user.username, m.from_user.first_name, "link")
-            
-            # Taklif sonini oshirish
-            db.add_invite(invited_by, 1)
-            
-            # Taklif qiluvchiga xabar
-            try:
-                bot.send_message(
-                    invited_by, 
-                    f"🎉 {m.from_user.first_name} sizning linkingiz orqali botga qo'shildi!\n👥 +1 taklif"
-                )
-            except:
-                pass
+    # Foydalanuvchini yaratish (start orqali taklif hisoblanmaydi)
+    db.create_user(uid, m.from_user.username, m.from_user.first_name)
     
     # Asosiy menu
     menu(uid, m.chat.id)
@@ -759,20 +736,20 @@ def user_stats(message):
     if db.check_ban(uid):
         return bot.reply_to(message, "❌ Siz bloklangansiz!")
     
-    invites, stars, vip, invited_by = db.get(uid)
+    invites, stars, vip = db.get(uid)
     
     text = f"""
 📊 <b>STATISTIKANGIZ</b>
 
-👥 Takliflar: {invites}
-⭐ Yulduzlar: {stars}
+👥 Guruhga taklif qilganingiz: {invites} ta
+⭐ Yulduzlaringiz: {stars}
 👑 VIP: {"✅" if vip else "❌"}
 """
     bot.reply_to(message, text)
 
 @bot.message_handler(commands=['help'])
 def help_cmd(message):
-    help_text = """
+    help_text = f"""
 🤖 <b>BOT YORDAM</b>
 
 📌 <b>Asosiy buyruqlar:</b>
@@ -781,19 +758,20 @@ def help_cmd(message):
 /help - Yordam
 /top - Top foydalanuvchilar
 
-🔗 <b>Referral:</b>
-/start [referrer_id] - Do'stingiz orqali qo'shilish
-
-👥 <b>Guruh:</b>
+👥 <b>Guruhga odam qo'shish:</b>
 Guruhga odam qo'shsangiz, avtomatik hisoblanadi!
+Har 2 ta taklif = 1 ⭐ yulduz
 
 🛍 <b>Do'kon:</b>
 Yulduzlaringizni sovg'alarga almashtiring!
 
 📊 <b>Qoidalar:</b>
+• Faqat guruhga qo'shish hisoblanadi
 • Har 2 ta taklif = 1 ⭐ yulduz
 • 50+ yulduzli sovg'alar VIP beradi
 • Spam qilganlar ban qilinadi
+
+📢 Guruh: @Stars_2_odam_1stars
 """
     bot.reply_to(message, help_text)
 
@@ -803,12 +781,12 @@ def send_leaderboard():
         top = db.get_top(10)
         if not top:
             return
-        text = "🏆 <b>ENG FAOL REFERRALLAR</b>\n\n"
+        text = "🏆 <b>ENG FAOL TAKLIFCHILAR</b>\n\n"
         for i, (username, name, invites, stars) in enumerate(top, 1):
             user = f"@{username}" if username else name
             medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}️⃣"
             text += f"{medal} <b>{user}</b> — 👥 {invites} ta | ⭐ {stars} yulduz\n"
-        text += "\n🔥 Har 2 ta odam qo'shsangiz = 1 yulduz"
+        text += "\n🔥 Guruhga har 2 ta odam qo'shsangiz = 1 yulduz"
         
         for channel in REQUIRED_CHANNELS:
             try:
@@ -823,22 +801,45 @@ def leaderboard_scheduler():
         send_leaderboard()
         time.sleep(120)  # 2 daqiqa
 
+# ================= SIGNAL HANDLER =================
+def signal_handler(sig, frame):
+    print("\n🛑 Bot to'xtatilmoqda...")
+    bot.stop_polling()
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
 # ================= MAIN =================
 if __name__ == "__main__":
     print(f"🔐 Bot xavfsizlik: faol")
     print(f"🆔 Admin ID: {config.ADMIN_ID}")
+    print(f"👥 Guruh ID: {GROUP_ID}")
     print("🚀 BOT ISHGA TUSHIRILDI")
+    print("📌 FAQAT GURUHGA QO'SHISH HISOBLANADI!")
     
     # Threadlarni ishga tushirish
     Thread(target=leaderboard_scheduler, daemon=True).start()
     
+    # Eski pollingni to'xtatish
+    try:
+        bot.stop_polling()
+        time.sleep(1)
+    except:
+        pass
+    
     # Asosiy loop
     while True:
         try:
-            bot.infinity_polling(timeout=30, long_polling_timeout=30)
+            print("♻️ Polling boshlandi...")
+            bot.infinity_polling(timeout=30, long_polling_timeout=30, skip_pending=True)
         except KeyboardInterrupt:
             print("👋 Bot to'xtatildi")
             break
         except Exception as e:
-            logger.critical(f"KRITIK XATOLIK: {e}")
-            time.sleep(5)
+            if "409" in str(e):
+                print("⚠️ 409 xato - 10 soniya kuting...")
+                time.sleep(10)
+            else:
+                logger.critical(f"KRITIK XATOLIK: {e}")
+                time.sleep(5)
