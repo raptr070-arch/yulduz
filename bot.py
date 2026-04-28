@@ -33,15 +33,15 @@ except ValueError as e:
 # ================= OBUNA TEKSHIRISH KONFIG =================
 REQUIRED_CHANNELS = [
     {
-        "id": -1002449896845,
+        "id": -1003737363661,
         "username": "@Tekin_stars_yulduz",
         "url": "https://t.me/Tekin_stars_yulduz",
         "name": "📢 KANAL"
     },
     {
-        "id": -1001234567890,  # ← Guruh ID ni o'zgartiring
-        "username": "@guruh_username",  # ← Guruh username
-        "url": "https://t.me/guruh_username",  # ← Guruh linki
+        "id":-1002449896845,  # ← Guruh ID ni o'zgartiring
+        "username": "@Stars_2_odam_1stars",  # ← Guruh username
+        "url": "https://t.me/Stars_2_odam_1stars",  # ← Guruh linki
         "name": "👥 GURUH"
     }
 ]
