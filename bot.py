@@ -17,6 +17,7 @@ load_dotenv()
 class SecurityConfig:
     def __init__(self):
         self.API_TOKEN = os.getenv("BOT_TOKEN")
+        self.CHANNEL_USERNAME = "@Tekin_stars_yulduz"  # ← Kanal username
         self.CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-1002449896845"))
         self.ADMIN_ID = int(os.getenv("ADMIN_ID", "2010030869"))
         self.BOT_USERNAME = os.getenv("BOT_USERNAME", "Tekin_stars_yulduz")
